@@ -1,0 +1,383 @@
+<html>
+<head>
+  <title>Voxels Project</title>
+  <meta name="description" content="HTML5">
+  <meta charset="UTF-8">
+  <link rel="stylesheet" href="https://stackpath.bootstrapcdn.com/bootstrap/4.1.3/css/bootstrap.min.css" integrity="sha384-MCw98/SFnGE8fJT3GXwEOngsV7Zt27NXFoaoApmYm81iuXoPkFOJwJ8ERdknLPMO" crossorigin="anonymous">
+  <link rel="stylesheet" href="style.css">
+  <link rel="shortcut icon" href="favicon.png" type="image/x-icon">
+  <link rel="icon" href="favicon.png" type="image/x-icon">
+  <script type="text/javascript" src="commons/webgl-utils.js"></script>
+  <script type="text/javascript" src="commons/initShaders.js"></script>
+  <script type="text/javascript" src="commons/MV.js"></script>
+  <script type="text/javascript" src="examples.js"></script>
+  <script type="text/javascript" src="helpers.js"></script>
+  <script type="text/javascript" src="main.js"></script>
+  <script type="text/javascript" src="shadow.js"></script>
+  <script type="text/javascript" src="cubeMethods.js"></script>
+  <script type="text/javascript" src="scene.js"></script>
+
+  <script type="text/javascript" src="colorpicker.js"></script>
+  <script type="text/javascript" src="interactions.js"></script>
+
+  <script id="vertex-shader-base" type="x-shader/x-vertex">
+    attribute vec4 vPosition;
+    attribute vec4 vColor;
+    uniform mat4 u_ProjectionMatrix;
+    uniform mat4 u_ViewMatrix;
+    uniform mat4 u_ModelMatrix;
+
+    varying vec4 fColor;
+    void main()
+    {
+    gl_Position = u_ProjectionMatrix * u_ViewMatrix * u_ModelMatrix * vPosition;
+    gl_PointSize = 20.0;
+    fColor = vColor;
+    }
+  </script>
+
+  <script id="fragment-shader-base" type="x-shader/x-fragment">
+  precision mediump float;
+  varying vec4 fColor;
+
+  void main()
+  {
+    gl_FragColor = fColor;
+  }
+  </script>
+
+  <script id="vertex-shader-shading" type="x-shader/x-vertex">
+    attribute vec4 vPosition;
+    attribute vec3 vNormal;
+    attribute vec4 vColor;
+
+    uniform mat4 u_ProjectionMatrix;
+    uniform mat4 u_ViewMatrix;
+    uniform mat4 u_ModelMatrix;
+    uniform mat3 u_NormalMatrix;
+    uniform vec4 light_position;
+
+    varying vec4 fColor;
+    varying vec3 N, L, E;
+
+    uniform mat4 u_MvpMatrixFromLight;
+    varying vec4 v_PositionFromLight;
+
+    void main()
+    {
+      gl_Position = u_ProjectionMatrix * u_ViewMatrix * u_ModelMatrix * vPosition;
+      vec3 pos = (u_ViewMatrix * u_ModelMatrix * vPosition).xyz;
+      N = normalize(u_NormalMatrix * vNormal);
+      vec3 light = (u_ViewMatrix * u_ModelMatrix * light_position).xyz;
+      L = light_position.w == 0.0 ? normalize(light) : normalize(light - pos); // directional or point light
+      E = normalize(-pos);
+      fColor = vColor;
+      v_PositionFromLight = u_MvpMatrixFromLight * vPosition;
+    }
+  </script>
+
+  <script id="fragment-shader-shading" type="x-shader/x-fragment">
+    precision mediump float;
+    varying vec4 fColor;
+    varying vec3 N, L, E;
+
+    uniform sampler2D u_ShadowMap;
+    varying vec4 v_PositionFromLight;
+
+    uniform float intensity;
+    uniform float kd;
+    uniform float ka;
+    uniform float ks;
+    uniform float alpha;
+
+    float unpackDepth(const in vec4 rgbaDepth)
+    {
+      const vec4 bitShift = vec4(1.0, 1.0/256.0, 1.0/(256.0 * 256.0), 1.0/(256.0 * 256.0 * 256.0));
+      float depth = dot(rgbaDepth, bitShift);
+      return depth;
+    }
+
+    void main()
+    {
+      vec3 Nfrag = normalize(N);
+      vec3 Efrag = normalize(E);
+      vec3 Lfrag = normalize(L);
+      vec3 H = normalize(Lfrag + Efrag);
+
+      float diffuse = kd * max(dot(Nfrag, Lfrag), 0.0) * intensity;
+      float ambient = ka;
+      float specular = ks * pow(max(dot(Nfrag, H), 0.0), alpha) * intensity;
+
+      // Shadow map
+      vec3 shadowCoord = (v_PositionFromLight.xyz/v_PositionFromLight.w) / 2.0 + 0.5;
+      vec2 texCoord = vec2(shadowCoord.x, shadowCoord.y);
+      vec4 rgbaDepth = texture2D(u_ShadowMap, texCoord);
+      float depth = unpackDepth(rgbaDepth);
+      float visibility = (shadowCoord.z > depth + 0.0015) ? 0.7 : 1.0;
+
+      gl_FragColor = fColor * (ambient + diffuse * visibility + specular * visibility);
+      gl_FragColor.a = 1.0;
+    }
+  </script>
+
+  <script id="vertex-shader-shadow" type="x-shader/x-vertex">
+    attribute vec4 vPosition;
+    uniform mat4 u_ProjectionMatrix;
+    uniform mat4 u_ViewMatrix;
+    uniform mat4 u_ModelMatrix;
+
+    void main()
+    {
+      gl_Position = u_ProjectionMatrix * u_ViewMatrix * u_ModelMatrix * vPosition;
+    }
+  </script>
+
+  <script id="fragment-shader-shadow" type="x-shader/x-fragment">
+    precision mediump float;
+    void main()
+    {
+      const vec4 bitShift = vec4(1.0, 256.0, 256.0 * 256.0, 256.0 * 256.0 * 256.0);
+      const vec4 bitMask = vec4(1.0/256.0, 1.0/256.0, 1.0/256.0, 0.0);
+      vec4 rgbaDepth = fract(gl_FragCoord.z * bitShift);
+      rgbaDepth -= rgbaDepth.gbaa * bitMask;
+      gl_FragColor = rgbaDepth;
+    }
+  </script>
+
+  <script id="vertex-shaderC" type="x-shader/x-vertex">
+    attribute vec4 vPositionC;
+
+    attribute vec4 vertexColorC;
+    varying vec4 fColor;
+    void main()
+    {
+      gl_Position = vPositionC;
+      gl_PointSize = 20.0;
+      fColor = vertexColorC;
+    }
+  </script>
+
+  <script id="fragment-shaderC" type="x-shader/x-fragment">
+    precision mediump float;
+    varying vec4 fColor;
+
+    void main()
+    {
+      gl_FragColor = fColor;
+    }
+
+</script>
+
+
+<script id="vertex-shaderSlider" type="x-shader/x-vertex">
+  attribute vec4 vPositionC;
+
+  attribute vec4 vertexColorC;
+  varying vec4 fColor;
+  void main()
+  {
+    gl_Position = vPositionC;
+    gl_PointSize = 20.0;
+    fColor = vertexColorC;
+  }
+</script>
+
+<script id="fragment-shaderSlider" type="x-shader/x-fragment">
+  precision mediump float;
+  varying vec4 fColor;
+
+  void main()
+  {
+    gl_FragColor = fColor;
+  }
+
+</script>
+
+</head>
+<body>
+  <div class="container-full">
+    <div class="row" style="align-items: center;">
+      <h1 class="display-3">Voxels Project</h1>
+      <nav aria-label="Page navigation" style="margin-left: 20px">
+        <ul class="pagination" style="margin-bottom: 0">
+          <li class="page-item"><a class="page-link" href="../">Home</a></li>
+          <li class="page-item"><a class="page-link" href="report.html">
+            Report
+          </a></li>
+        </ul>
+      </nav>
+    </div>
+    <div class="row">
+      <div class="col-sm commands">
+        <div class="settings-menu">
+          <h3> Drawing </h3>
+          <div class="btn-group">
+            <button type="button" class="btn btn-info active" id="drawButton">Drawing</button>
+            <button type="button" class="btn btn-info" id="colorPickButton">Color Picker</button>
+          </div>
+          <div class="btn-group">
+            <button type="button" class="btn btn-info active" id="addCubeButton">Add cubes</button>
+            <button type="button" class="btn btn-info" id="removeCubeButton">Remove cubes</button>
+          </div>
+        </div>
+        <div>
+          <button type="button" class="btn btn-danger" id="clearButton">Clear all</button>
+        </div>
+
+        <div class="settings-menu">
+          <h3> Navigation </h3>
+          <div>
+            <div class="btn-group" role="group">
+              <button type="button" class="btn btn-secondary" id="zoomInButton">+</button>
+              <button type="button" class="btn btn-secondary" id="zoomOutButton">-</button>
+            </div>
+            Zoom
+          </div>
+          <div class="settings-group">
+            <div>
+              <div class="btn-group" role="group">
+                <button type="button" class="btn btn-secondary" id="thetaPlusButton">+</button>
+                <button type="button" class="btn btn-secondary" id="thetaMinusButton">-</button>
+              </div>
+              Theta
+            </div>
+
+            <div>
+              <div class="btn-group" role="group">
+                <button type="button" class="btn btn-secondary" id="phiPlusButton">+</button>
+                <button type="button" class="btn btn-secondary" id="phiMinusButton">-</button>
+              </div>
+              Phi
+            </div>
+          </div>
+
+          <div class="settings-group">
+            <div>
+              <div class="btn-group" role="group">
+                <button type="button" class="btn btn-secondary" id="truckXPlusButton">+</button>
+                <button type="button" class="btn btn-secondary" id="truckXMinusButton">-</button>
+              </div>
+              Truck
+            </div>
+            <div>
+              <div class="btn-group" role="group">
+                <button type="button" class="btn btn-secondary" id="truckYPlusButton">+</button>
+                <button type="button" class="btn btn-secondary" id="truckYMinusButton">-</button>
+              </div>
+              Pedestal
+            </div>
+          </div>
+
+        </div>
+
+        <div class="settings-menu">
+          <h3> Lighting </h3>
+
+          <div class="btn-group">
+            <button type="button" class="btn btn-info active" id="shadowsOnButton">Shadows On</button>
+            <button type="button" class="btn btn-info" id="shadowsOffButton">Shadows Off</button>
+          </div>
+
+          <div class="btn-group">
+            <button type="button" class="btn btn-info active" id="hardNormalsButton">Flat Shading</button>
+            <button type="button" class="btn btn-info" id="softNormalsButton">Phong Shading</button>
+          </div>
+
+          <div id="currentLightParametersDisp">  </div>
+
+          <div class="settings-group">
+            <div>
+              <div class="btn-group" role="group">
+                <button type="button" class="btn btn-secondary" id="LightX">+</button>
+                <button type="button" class="btn btn-secondary" id="LightXMinus">-</button>
+              </div>
+              X
+            </div>
+
+            <div>
+              <div class="btn-group" role="group">
+                <button type="button" class="btn btn-secondary" id="LightY">+</button>
+                <button type="button" class="btn btn-secondary" id="LightYMinus">-</button>
+              </div>
+              Y
+            </div>
+
+            <div>
+              <div class="btn-group" role="group">
+                <button type="button" class="btn btn-secondary" id="LightZ">+</button>
+                <button type="button" class="btn btn-secondary" id="LightZMinus">-</button>
+              </div>
+              Z
+            </div>
+          </div>
+
+          <div>
+            <div class="btn-group" role="group">
+              <button type="button" class="btn btn-secondary" id="intensity">+</button>
+              <button type="button" class="btn btn-secondary" id="intensityMinus">-</button>
+            </div>
+            Intensity
+          </div>
+
+          <div class="settings-group">
+            <div>
+              <div class="btn-group" role="group">
+                <button type="button" class="btn btn-secondary" id="kaButton">+</button>
+                <button type="button" class="btn btn-secondary" id="kaButtonMinus">-</button>
+              </div>
+              kA
+            </div>
+
+            <div>
+              <div class="btn-group" role="group">
+                <button type="button" class="btn btn-secondary" id="kdButton">+</button>
+                <button type="button" class="btn btn-secondary" id="kdButtonMinus">-</button>
+              </div>
+              kD
+            </div>
+          </div>
+
+          <div class="settings-group">
+            <div>
+              <div class="btn-group" role="group">
+                <button type="button" class="btn btn-secondary" id="ksButton">+</button>
+                <button type="button" class="btn btn-secondary" id="ksButtonMinus">-</button>
+              </div>
+              kS
+            </div>
+            <div>
+              <div class="btn-group" role="group">
+                <button type="button" class="btn btn-secondary" id="alphaButton">+</button>
+                <button type="button" class="btn btn-secondary" id="alphaButtonMinus">-</button>
+              </div>
+              alpha
+            </div>
+          </div>
+
+        </div>
+
+        <div class="settings-menu">
+          <h3>Demos</h3>
+            Choose a model and some demo presets.
+            <div class="settings-group">
+              <button type="button" class="btn btn-secondary" id="chickenButton">Chicken</button>
+              <button type="button" class="btn btn-secondary" id="appleButton">Apple</button>
+              <button type="button" class="btn btn-secondary" id="guyButton">Person</button>
+            </div>
+            <div class="settings-group">
+              <button type="button" class="btn btn-secondary" id="phongDemoButton">Phong Demo</button>
+            </div>
+        </div>
+
+      </div>
+
+      <div class="col-md">
+        <canvas id="glCanvas" width="800" height="800"></canvas>
+      </div>
+      <div class="col-sm">
+        <canvas id= "colorsCanvas" width ="400" height="400"></canvas>
+        <canvas id= "sliderCanvas" width ="400" height="400"></canvas>
+      </div>
+  </div>
+</body>
+</html>

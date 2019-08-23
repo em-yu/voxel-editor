@@ -1,0 +1,55 @@
+.container-full {
+  margin: 0 auto;
+  width: 100%;
+  padding-left: 50px;
+  padding-right: 50px;
+}
+
+/* h1 {
+  text-align: center;
+} */
+
+.commands {
+  max-width: 340px;
+}
+
+.settings-menu {
+  margin-top: 10px;
+  margin-bottom: 10px;
+}
+
+.settings-menu .btn-group, .settings-group .btn {
+  margin-bottom: 5px;
+}
+
+.settings-group {
+  display: flex;
+  flex-direction: row;
+  justify-content: space-between;
+}
+
+.settings-group > div {
+  width: 150px;
+}
+
+#currentLightParametersDisp {
+  background-color: #D3D3D3;
+  padding: 5px;
+  margin-bottom: 5px;
+}
+
+
+
+/* Report style */
+
+.figure-container {
+  display: flex;
+  flex-direction: row;
+  justify-content: center;
+  margin-top: 10px;
+  margin-bottom: 10px;
+}
+
+.figure-container .figure {
+  flex: 0 1 0;
+}
